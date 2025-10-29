@@ -5,31 +5,52 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write  # Needed to create releases and upload assets
+
 jobs:
   build-windows:
     runs-on: windows-latest
-    env:
-      VERSION: ${{ github.ref_name }} # e.g., v1.2.3
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
-      - name: Setup .NET
+      - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
+
+      # Normalize version: remove leading 'v' for MSBuild/NuGet, keep raw for display
+      - name: Normalize version from tag
+        id: ver
+        shell: pwsh
+        run: |
+          $raw = '${{ github.ref_name }}'
+          if (-not $raw) { throw 'github.ref_name is empty' }
+          $clean = $raw
+          if ($clean.StartsWith('v')) { $clean = $clean.Substring(1) }
+          if (-not ($clean -match '^[0-9]+\.[0-9]+\.[0-9]+(\-.+)?$')) {
+            throw "Tag '$raw' does not look like a SemVer (vMAJOR.MINOR.PATCH[‑prerelease])"
+          }
+          "raw=$raw"    | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "clean=$clean"| Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Restore
         run: dotnet restore SteamIconRestorer.sln
 
       - name: Build (Release)
-        run: dotnet build SteamIconRestorer.sln -c Release /p:Version=${{ env.VERSION }} /warnaserror-
+        run: >
+          dotnet build SteamIconRestorer.sln -c Release
+          /p:Version=${{ steps.ver.outputs.clean }}
+          /warnaserror-
 
       - name: Publish framework-dependent (portable)
         run: >
           dotnet publish SteamIconRestorer.csproj -c Release
           -o publish/portable
-          /p:Version=${{ env.VERSION }}
+          /p:Version=${{ steps.ver.outputs.clean }}
 
       - name: Publish self-contained single-file (win-x64)
         run: >
@@ -37,30 +58,30 @@ jobs:
           -p:PublishSingleFile=true -p:PublishTrimmed=false
           --self-contained true
           -o publish/win-x64
-          /p:Version=${{ env.VERSION }}
+          /p:Version=${{ steps.ver.outputs.clean }}
 
       - name: Create ZIPs
         shell: pwsh
         run: |
-          Compress-Archive -Path publish/portable/* -DestinationPath SteamIconRestorer-${{ env.VERSION }}-portable.zip
-          Compress-Archive -Path publish/win-x64/* -DestinationPath SteamIconRestorer-${{ env.VERSION }}-win-x64.zip
+          Compress-Archive -Path publish/portable/* -DestinationPath SteamIconRestorer-${{ steps.ver.outputs.raw }}-portable.zip
+          Compress-Archive -Path publish/win-x64/* -DestinationPath SteamIconRestorer-${{ steps.ver.outputs.raw }}-win-x64.zip
 
       - name: Compute checksums
         shell: pwsh
         run: |
-          Get-FileHash SteamIconRestorer-${{ env.VERSION }}-portable.zip -Algorithm SHA256 | % { $_.Hash + "  " + $_.Path } | Out-File SHA256SUMS.txt -Encoding ascii
-          Get-FileHash SteamIconRestorer-${{ env.VERSION }}-win-x64.zip -Algorithm SHA256 | % { $_.Hash + "  " + $_.Path } | Add-Content SHA256SUMS.txt -Encoding ascii
+          Get-FileHash SteamIconRestorer-${{ steps.ver.outputs.raw }}-portable.zip -Algorithm SHA256 | % { $_.Hash + "  " + $_.Path } | Out-File SHA256SUMS.txt -Encoding ascii
+          Get-FileHash SteamIconRestorer-${{ steps.ver.outputs.raw }}-win-x64.zip -Algorithm SHA256 | % { $_.Hash + "  " + $_.Path } | Add-Content SHA256SUMS.txt -Encoding ascii
 
       - name: Create GitHub Release and upload assets
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ env.VERSION }}
-          name: Steam Icon Restorer ${{ env.VERSION }}
+          tag_name: ${{ steps.ver.outputs.raw }}
+          name: Steam Icon Restorer ${{ steps.ver.outputs.raw }}
           draft: false
-          prerelease: ${{ contains(env.VERSION, '-') }}
+          prerelease: ${{ contains(steps.ver.outputs.raw, '-') }}
           files: |
-            SteamIconRestorer-${{ env.VERSION }}-portable.zip
-            SteamIconRestorer-${{ env.VERSION }}-win-x64.zip
+            SteamIconRestorer-${{ steps.ver.outputs.raw }}-portable.zip
+            SteamIconRestorer-${{ steps.ver.outputs.raw }}-win-x64.zip
             SHA256SUMS.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
