@@ -44,13 +44,14 @@ jobs:
         run: >
           dotnet build SteamIconRestorer.sln -c Release
           /p:Version=${{ steps.ver.outputs.clean }}
-          /warnaserror-
+          /p:TreatWarningsAsErrors=false
 
       - name: Publish framework-dependent (portable)
         run: >
           dotnet publish SteamIconRestorer.csproj -c Release
           -o publish/portable
           /p:Version=${{ steps.ver.outputs.clean }}
+          /p:TreatWarningsAsErrors=false
 
       - name: Publish self-contained single-file (win-x64)
         run: >
@@ -59,6 +60,7 @@ jobs:
           --self-contained true
           -o publish/win-x64
           /p:Version=${{ steps.ver.outputs.clean }}
+          /p:TreatWarningsAsErrors=false
 
       - name: Create ZIPs
         shell: pwsh
