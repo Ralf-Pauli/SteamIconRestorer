@@ -74,19 +74,14 @@ jobs:
           Get-FileHash SteamIconRestorer-${{ steps.ver.outputs.raw }}-win-portable.zip -Algorithm SHA256 | % { $_.Hash + "  " + $_.Path } | Out-File SHA256SUMS-Windows.txt -Encoding ascii
           Get-FileHash SteamIconRestorer-${{ steps.ver.outputs.raw }}-win-x64.zip -Algorithm SHA256 | % { $_.Hash + "  " + $_.Path } | Add-Content SHA256SUMS-Windows.txt -Encoding ascii
 
-      - name: Release assets (Windows)
-        uses: softprops/action-gh-release@v2
+      - name: Upload artifacts (Windows)
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: ${{ steps.ver.outputs.raw }}
-          name: Steam Icon Restorer ${{ steps.ver.outputs.raw }}
-          draft: false
-          prerelease: ${{ contains(steps.ver.outputs.raw, '-') }}
-          files: |
+          name: windows
+          path: |
             SteamIconRestorer-${{ steps.ver.outputs.raw }}-win-portable.zip
             SteamIconRestorer-${{ steps.ver.outputs.raw }}-win-x64.zip
             SHA256SUMS-Windows.txt
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-linux:
     name: Linux (linux-x64)
@@ -140,18 +135,13 @@ jobs:
         run: |
           sha256sum SteamIconRestorer-${{ steps.ver.outputs.raw }}-linux-x64.tar.gz > SHA256SUMS-Linux.txt
 
-      - name: Release assets (Linux)
-        uses: softprops/action-gh-release@v2
+      - name: Upload artifacts (Linux)
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: ${{ steps.ver.outputs.raw }}
-          name: Steam Icon Restorer ${{ steps.ver.outputs.raw }}
-          draft: false
-          prerelease: ${{ contains(steps.ver.outputs.raw, '-') }}
-          files: |
+          name: linux
+          path: |
             SteamIconRestorer-${{ steps.ver.outputs.raw }}-linux-x64.tar.gz
             SHA256SUMS-Linux.txt
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-macos:
     name: macOS (osx-x64, osx-arm64)
@@ -216,7 +206,56 @@ jobs:
           shasum -a 256 SteamIconRestorer-${{ steps.ver.outputs.raw }}-osx-arm64.tar.gz > SHA256SUMS-macOS.txt
           shasum -a 256 SteamIconRestorer-${{ steps.ver.outputs.raw }}-osx-x64.tar.gz >> SHA256SUMS-macOS.txt
 
-      - name: Release assets (macOS)
+      - name: Upload artifacts (macOS)
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: |
+            SteamIconRestorer-${{ steps.ver.outputs.raw }}-osx-arm64.tar.gz
+            SteamIconRestorer-${{ steps.ver.outputs.raw }}-osx-x64.tar.gz
+            SHA256SUMS-macOS.txt
+
+  publish-release:
+    name: Publish unified release
+    runs-on: ubuntu-latest
+    needs: [build-windows, build-linux, build-macos]
+    steps:
+      - name: Compute tag values
+        id: ver
+        shell: bash
+        run: |
+          raw="${GITHUB_REF_NAME}"
+          if [ -z "$raw" ]; then echo "empty ref name"; exit 1; fi
+          echo "raw=$raw" >> "$GITHUB_OUTPUT"
+          clean="$raw"; if [[ "$clean" == v* ]]; then clean="${clean:1}"; fi
+          echo "clean=$clean" >> "$GITHUB_OUTPUT"
+
+      - name: Download Windows artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: windows
+          path: windows
+
+      - name: Download Linux artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: linux
+          path: linux
+
+      - name: Download macOS artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: macos
+          path: macos
+
+      - name: Merge checksums into SHA256SUMS.txt
+        shell: bash
+        run: |
+          cat windows/SHA256SUMS-Windows.txt > SHA256SUMS.txt
+          cat linux/SHA256SUMS-Linux.txt >> SHA256SUMS.txt
+          cat macos/SHA256SUMS-macOS.txt >> SHA256SUMS.txt
+
+      - name: Create GitHub Release and upload assets (all OS)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ver.outputs.raw }}
@@ -224,8 +263,11 @@ jobs:
           draft: false
           prerelease: ${{ contains(steps.ver.outputs.raw, '-') }}
           files: |
-            SteamIconRestorer-${{ steps.ver.outputs.raw }}-osx-arm64.tar.gz
-            SteamIconRestorer-${{ steps.ver.outputs.raw }}-osx-x64.tar.gz
-            SHA256SUMS-macOS.txt
+            windows/SteamIconRestorer-${{ steps.ver.outputs.raw }}-win-portable.zip
+            windows/SteamIconRestorer-${{ steps.ver.outputs.raw }}-win-x64.zip
+            linux/SteamIconRestorer-${{ steps.ver.outputs.raw }}-linux-x64.tar.gz
+            macos/SteamIconRestorer-${{ steps.ver.outputs.raw }}-osx-arm64.tar.gz
+            macos/SteamIconRestorer-${{ steps.ver.outputs.raw }}-osx-x64.tar.gz
+            SHA256SUMS.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
