@@ -1,0 +1,231 @@
+﻿name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Windows (win-x64)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Normalize version from tag
+        id: ver
+        shell: pwsh
+        run: |
+          $raw = '${{ github.ref_name }}'
+          if (-not $raw) { throw 'github.ref_name is empty' }
+          $clean = $raw
+          if ($clean.StartsWith('v')) { $clean = $clean.Substring(1) }
+          if (-not ($clean -match '^[0-9]+\.[0-9]+\.[0-9]+(\-.+)?$')) {
+            throw "Tag '$raw' does not look like a SemVer (vMAJOR.MINOR.PATCH[-prerelease])"
+          }
+          "raw=$raw"     | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "clean=$clean" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Restore
+        run: dotnet restore SteamIconRestorer.sln
+
+      - name: Build (Release)
+        run: >
+          dotnet build SteamIconRestorer.sln -c Release
+          /p:Version=${{ steps.ver.outputs.clean }}
+          /p:TreatWarningsAsErrors=false
+
+      - name: Publish framework-dependent (portable)
+        run: >
+          dotnet publish SteamIconRestorer.csproj -c Release
+          -o publish/portable
+          /p:Version=${{ steps.ver.outputs.clean }}
+          /p:TreatWarningsAsErrors=false
+
+      - name: Publish self-contained single-file (win-x64)
+        run: >
+          dotnet publish SteamIconRestorer.csproj -c Release -r win-x64
+          -p:PublishSingleFile=true -p:PublishTrimmed=false
+          --self-contained true
+          -o publish/win-x64
+          /p:Version=${{ steps.ver.outputs.clean }}
+          /p:TreatWarningsAsErrors=false
+
+      - name: Create archives
+        shell: pwsh
+        run: |
+          Compress-Archive -Path publish/portable/* -DestinationPath SteamIconRestorer-${{ steps.ver.outputs.raw }}-win-portable.zip
+          Compress-Archive -Path publish/win-x64/* -DestinationPath SteamIconRestorer-${{ steps.ver.outputs.raw }}-win-x64.zip
+
+      - name: Checksums
+        shell: pwsh
+        run: |
+          Get-FileHash SteamIconRestorer-${{ steps.ver.outputs.raw }}-win-portable.zip -Algorithm SHA256 | % { $_.Hash + "  " + $_.Path } | Out-File SHA256SUMS-Windows.txt -Encoding ascii
+          Get-FileHash SteamIconRestorer-${{ steps.ver.outputs.raw }}-win-x64.zip -Algorithm SHA256 | % { $_.Hash + "  " + $_.Path } | Add-Content SHA256SUMS-Windows.txt -Encoding ascii
+
+      - name: Release assets (Windows)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.raw }}
+          name: Steam Icon Restorer ${{ steps.ver.outputs.raw }}
+          draft: false
+          prerelease: ${{ contains(steps.ver.outputs.raw, '-') }}
+          files: |
+            SteamIconRestorer-${{ steps.ver.outputs.raw }}-win-portable.zip
+            SteamIconRestorer-${{ steps.ver.outputs.raw }}-win-x64.zip
+            SHA256SUMS-Windows.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-linux:
+    name: Linux (linux-x64)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Normalize version from tag
+        id: ver
+        shell: bash
+        run: |
+          raw="${GITHUB_REF_NAME}"
+          if [ -z "$raw" ]; then echo "empty ref name"; exit 1; fi
+          clean="$raw"
+          if [[ "$clean" == v* ]]; then clean="${clean:1}"; fi
+          if [[ ! "$clean" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-.+)?$ ]]; then echo "bad semver: $raw"; exit 1; fi
+          echo "raw=$raw"   >> "$GITHUB_OUTPUT"
+          echo "clean=$clean" >> "$GITHUB_OUTPUT"
+
+      - name: Restore
+        run: dotnet restore SteamIconRestorer.sln
+
+      - name: Build (Release)
+        run: >
+          dotnet build SteamIconRestorer.sln -c Release
+          /p:Version=${{ steps.ver.outputs.clean }}
+          /p:TreatWarningsAsErrors=false
+
+      - name: Publish framework-dependent (linux-x64)
+        run: >
+          dotnet publish SteamIconRestorer.csproj -c Release -r linux-x64
+          --self-contained false
+          -o publish/linux-x64
+          /p:Version=${{ steps.ver.outputs.clean }}
+          /p:TreatWarningsAsErrors=false
+
+      - name: Create tar.gz
+        run: |
+          cd publish/linux-x64
+          tar -czf ../../SteamIconRestorer-${{ steps.ver.outputs.raw }}-linux-x64.tar.gz *
+
+      - name: Checksums
+        run: |
+          sha256sum SteamIconRestorer-${{ steps.ver.outputs.raw }}-linux-x64.tar.gz > SHA256SUMS-Linux.txt
+
+      - name: Release assets (Linux)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.raw }}
+          name: Steam Icon Restorer ${{ steps.ver.outputs.raw }}
+          draft: false
+          prerelease: ${{ contains(steps.ver.outputs.raw, '-') }}
+          files: |
+            SteamIconRestorer-${{ steps.ver.outputs.raw }}-linux-x64.tar.gz
+            SHA256SUMS-Linux.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-macos:
+    name: macOS (osx-x64, osx-arm64)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Normalize version from tag
+        id: ver
+        shell: bash
+        run: |
+          raw="${GITHUB_REF_NAME}"
+          if [ -z "$raw" ]; then echo "empty ref name"; exit 1; fi
+          clean="$raw"
+          if [[ "$clean" == v* ]]; then clean="${clean:1}"; fi
+          if [[ ! "$clean" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-.+)?$ ]]; then echo "bad semver: $raw"; exit 1; fi
+          echo "raw=$raw"   >> "$GITHUB_OUTPUT"
+          echo "clean=$clean" >> "$GITHUB_OUTPUT"
+
+      - name: Restore
+        run: dotnet restore SteamIconRestorer.sln
+
+      - name: Build (Release)
+        run: >
+          dotnet build SteamIconRestorer.sln -c Release
+          /p:Version=${{ steps.ver.outputs.clean }}
+          /p:TreatWarningsAsErrors=false
+
+      - name: Publish framework-dependent (osx-arm64)
+        run: >
+          dotnet publish SteamIconRestorer.csproj -c Release -r osx-arm64
+          --self-contained false
+          -o publish/osx-arm64
+          /p:Version=${{ steps.ver.outputs.clean }}
+          /p:TreatWarningsAsErrors=false
+
+      - name: Publish framework-dependent (osx-x64)
+        run: >
+          dotnet publish SteamIconRestorer.csproj -c Release -r osx-x64
+          --self-contained false
+          -o publish/osx-x64
+          /p:Version=${{ steps.ver.outputs.clean }}
+          /p:TreatWarningsAsErrors=false
+
+      - name: Create tar.gz
+        run: |
+          cd publish/osx-arm64
+          tar -czf ../../SteamIconRestorer-${{ steps.ver.outputs.raw }}-osx-arm64.tar.gz *
+          cd ../osx-x64
+          tar -czf ../../SteamIconRestorer-${{ steps.ver.outputs.raw }}-osx-x64.tar.gz *
+
+      - name: Checksums
+        run: |
+          shasum -a 256 SteamIconRestorer-${{ steps.ver.outputs.raw }}-osx-arm64.tar.gz > SHA256SUMS-macOS.txt
+          shasum -a 256 SteamIconRestorer-${{ steps.ver.outputs.raw }}-osx-x64.tar.gz >> SHA256SUMS-macOS.txt
+
+      - name: Release assets (macOS)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.raw }}
+          name: Steam Icon Restorer ${{ steps.ver.outputs.raw }}
+          draft: false
+          prerelease: ${{ contains(steps.ver.outputs.raw, '-') }}
+          files: |
+            SteamIconRestorer-${{ steps.ver.outputs.raw }}-osx-arm64.tar.gz
+            SteamIconRestorer-${{ steps.ver.outputs.raw }}-osx-x64.tar.gz
+            SHA256SUMS-macOS.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -121,7 +121,7 @@ public class SteamIconRestorer
         }
 
         var request = new PICSRequest(appId);
-        steamApps.PICSGetProductInfo(request, null);
+        _ = steamApps.PICSGetProductInfo(request, null);
 
         // Subscribe to the response
         var subscription = _callbackManager.Subscribe<PICSProductInfoCallback>(callback =>
